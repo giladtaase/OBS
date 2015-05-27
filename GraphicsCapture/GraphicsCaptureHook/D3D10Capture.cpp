@@ -81,7 +81,7 @@ void SetupD3D10(IDXGISwapChain *swapChain)
 
                 logOutput << CurrentTimeString() << "found dxgi format (dx10) of: " << UINT(dxgiFormat) <<
                     ", size: {" << scd.BufferDesc.Width << ", " << scd.BufferDesc.Height <<
-                    "}, multisampled: " << (bIsMultisampled ? "true" : "false") << endl;
+                    "}, multisampled: " << (bIsMultisampled ? "true" : "false") << ", wnd: " << scd.OutputWindow << endl;
             }
         }
     }
@@ -95,8 +95,10 @@ typedef HRESULT (WINAPI *CREATEDXGIFACTORY1PROC)(REFIID riid, void **ppFactory);
 
 bool DoD3D10Hook(ID3D10Device *device)
 {
-    HRESULT hErr;
+    logOutput << CurrentTimeString() << "DoD3D10Hook called" << endl;
 
+    HRESULT hErr;
+     
     D3D10_TEXTURE2D_DESC texGameDesc;
     ZeroMemory(&texGameDesc, sizeof(texGameDesc));
     texGameDesc.Width               = d3d10CaptureInfo.cx;
@@ -152,11 +154,14 @@ void DoD3D10Capture(IDXGISwapChain *swap)
     ID3D10Device *device = NULL;
     if(SUCCEEDED(swap->GetDevice(__uuidof(ID3D10Device), (void**)&device)))
     {
-        if(bCapturing && WaitForSingleObject(hSignalEnd, 0) == WAIT_OBJECT_0)
+        if (bCapturing && WaitForSingleObject(hSignalEnd, 0) == WAIT_OBJECT_0) {
+            RUNEVERYRESET logOutput << CurrentTimeString() << "hSignalEnd was signaled" << endl;
             bStopRequested = true;
+        }
 
         if(bCapturing && !IsWindow(hwndOBS))
         {
+            RUNEVERYRESET logOutput << CurrentTimeString() << "hwndOBS: " << hwndOBS << ", it's not a window" << endl;
             hwndOBS = NULL;
             bStopRequested = true;
         }
@@ -178,7 +183,7 @@ void DoD3D10Capture(IDXGISwapChain *swap)
         {
             RUNEVERYRESET logOutput << CurrentTimeString() << "stop requested, terminating d3d10 capture" << endl;
 
-            ClearD3D10Data();
+            ClearD3D10Data(); // also sets bHasTextures to false
             bCapturing = false;
             bStopRequested = false;
         }
@@ -217,6 +222,7 @@ void DoD3D10Capture(IDXGISwapChain *swap)
                 }
                 else
                 {
+                    logOutput << CurrentTimeString() << "DoD3D10Hook: failure" << endl;
                     ClearD3D10Data();
                 }
             }
@@ -273,12 +279,13 @@ void DoD3D10Capture(IDXGISwapChain *swap)
                                     device->CopyResource(copyD3D10TextureGame, backBuffer);
 
                                 RUNEVERYRESET logOutput << CurrentTimeString() << "successfully capturing d3d10 frames via GPU" << endl;
+                                //logOutput << CurrentTimeString() << "successfully capturing d3d10 frames via GPU" << endl;
 
                                 backBuffer->Release();
                             } else {
                                 RUNEVERYRESET logOutput << CurrentTimeString() << "DoD3D10Capture: swap->GetBuffer failed: result = " << UINT(hRes) << endl;
                             }
-
+                             
                             curCapture = nextCapture;
                         }
                     }

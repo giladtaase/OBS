@@ -50,6 +50,10 @@ DOCLEARPROC   clearProc = NULL;
 extern LPVOID lpCurrentSwap;
 extern LPVOID lpCurrentDevice;
 
+bool g_capturingPrimary;
+
+CRITICAL_SECTION g_swapHookCS;
+
 void SetupDXGIStuff(IDXGISwapChain *swap)
 {
     IUnknown *deviceUnk, *device;
@@ -104,6 +108,8 @@ typedef HRESULT(STDMETHODCALLTYPE *DXGISwapResizeBuffersHookPROC)(IDXGISwapChain
 
 HRESULT STDMETHODCALLTYPE DXGISwapResizeBuffersHook(IDXGISwapChain *swap, UINT bufferCount, UINT width, UINT height, DXGI_FORMAT giFormat, UINT flags)
 {
+    logOutput << CurrentTimeString() << "DXGI: DXGISwapResizeBuffersHook called" << endl;
+
     if(clearProc)
         (*clearProc)();
 
@@ -128,12 +134,84 @@ typedef HRESULT(STDMETHODCALLTYPE *DXGISwapPresentHookPROC)(IDXGISwapChain *swap
 
 HRESULT STDMETHODCALLTYPE DXGISwapPresentHook(IDXGISwapChain *swap, UINT syncInterval, UINT flags)
 {
-    if(lpCurrentSwap == NULL && !bTargetAcquired)
-        SetupDXGIStuff(swap);
+    if (!TryEnterCriticalSection(&g_swapHookCS)) {
+        logOutput << CurrentTimeString() << "DXGI: DXGISwapPresentHook -- good thing we use critical section!!!" << endl;
+        EnterCriticalSection(&g_swapHookCS);
+    }
 
-    if ((flags & DXGI_PRESENT_TEST) == 0 && lpCurrentSwap == swap && captureProc)
-        (*captureProc)(swap);
+    DXGI_SWAP_CHAIN_DESC scd = { 0 };
+    swap->GetDesc(&scd); 
 
+    bool multipleOutputs = false;
+    bool isPrimary = true;
+
+    logOutput << CurrentTimeString() << "DXGI: DXGISwapPresentHook called flags=" << flags <<
+        "cx=" << scd.BufferDesc.Width << " cy=" << scd.BufferDesc.Height << " wnd=" << scd.OutputWindow << endl;
+
+    IDXGIDevice *device;
+    swap->GetDevice(__uuidof(IDXGIDevice), (void**)&device);
+
+    IDXGIAdapter *adapter;
+    device->GetAdapter(&adapter); 
+
+    HRESULT hr = S_OK;
+    int i = 0;
+
+    do {
+        IDXGIOutput *dummy = NULL;
+        hr = adapter->EnumOutputs(i, &dummy);
+        if (dummy != NULL) 
+
+            dummy->Release();
+        i++;
+    } while (hr == S_OK);
+   
+    if (hr == DXGI_ERROR_NOT_FOUND && i > 2) {
+        multipleOutputs = true;
+    }
+
+    adapter->Release();
+    device->Release();
+
+    IDXGIOutput* output = NULL;
+    swap->GetContainingOutput(&output);
+    DXGI_OUTPUT_DESC desc;
+    output->GetDesc(&desc);
+    RECT rect = desc.DesktopCoordinates;
+    //logOutput << CurrentTimeString() << " DesktopCoordinates: " << rect.left << " " << rect.top << " " << rect.right << " " << rect.bottom << endl;
+    //logOutput << CurrentTimeString() << " Monitor: " << desc.Monitor << endl;
+
+    MONITORINFO mi = { 0 };
+    mi.cbSize = sizeof(MONITORINFO);
+    BOOL res = GetMonitorInfo(desc.Monitor, &mi);
+
+    DWORD dwErr = GetLastError();
+    //logOutput << CurrentTimeString() << " GetMonitorInfo retval=" << (res ? "TRUE" : "FALSE") << " err=" << dwErr << endl;
+
+    isPrimary = ((mi.dwFlags & MONITORINFOF_PRIMARY) != 0);
+    //logOutput << CurrentTimeString() << " GetMonitorInfo Flags: " << mi.dwFlags << " which means that this is " << (isPrimary ? "" : "not ") << "the primary display" << endl;
+    output->Release();
+    
+    if (multipleOutputs && !isPrimary || !multipleOutputs && isPrimary) {
+       
+        if (g_capturingPrimary != isPrimary) {
+            SetupDXGIStuff(swap); //SetupDXGIStuff sets the captureProc, sets lpCurrentSwap to swap and bTargetAcquired to true
+            g_capturingPrimary = isPrimary;
+        }
+        if (lpCurrentSwap == NULL && !bTargetAcquired) {
+            SetupDXGIStuff(swap); //SetupDXGIStuff sets the captureProc, sets lpCurrentSwap to swap and bTargetAcquired to true
+            g_capturingPrimary = isPrimary;
+        }
+
+        //logOutput << "DXGI: DXGISwapPresentHook flags=" << flags << " lpCurrentSwap=" << lpCurrentSwap << " swap=" << swap << endl;
+
+        // on the virtual monitor, all calls seem to have this value, for some reason
+        if ((flags & DXGI_PRESENT_TEST) == 0 || !isPrimary) 
+        if (lpCurrentSwap == swap && captureProc)
+            (*captureProc)(swap);
+        // captureProc (for example DoD3D10Capture) creates the shared surface (by calling DoD3D10Hook) and sets hSignalReady if needed. 
+        // It then copies frames to the shared surface
+    }
 #if OLDHOOKS
     giswapPresent.Unhook();
     HRESULT hRes = swap->Present(syncInterval, flags);
@@ -141,6 +219,8 @@ HRESULT STDMETHODCALLTYPE DXGISwapPresentHook(IDXGISwapChain *swap, UINT syncInt
 #else
     HRESULT hRes = ((DXGISwapPresentHookPROC)giswapPresent.origFunc)(swap, syncInterval, flags);
 #endif
+
+    LeaveCriticalSection(&g_swapHookCS);
 
     return hRes;
 }
@@ -280,6 +360,8 @@ d3d11_only:
 
 bool InitDXGICapture()
 {
+    InitializeCriticalSection(&g_swapHookCS);
+
     bool bSuccess = false;
 
     IDXGISwapChain *swap = CreateDummySwap();
@@ -288,8 +370,12 @@ bool InitDXGICapture()
         bSuccess = true;
 
         UPARAM *vtable = *(UPARAM**)swap;
-        giswapPresent.Hook((FARPROC)*(vtable+(32/4)), (FARPROC)DXGISwapPresentHook);
-        giswapResizeBuffers.Hook((FARPROC)*(vtable+(52/4)), (FARPROC)DXGISwapResizeBuffersHook);
+        if (giswapPresent.Hook((FARPROC)*(vtable + (32 / 4)), (FARPROC)DXGISwapPresentHook)) {
+            logOutput << CurrentTimeString() << "InitDXGICapture: successfully installed DXGISwapPresentHook" << endl;
+        }
+        if (giswapResizeBuffers.Hook((FARPROC)*(vtable + (52 / 4)), (FARPROC)DXGISwapResizeBuffersHook)) {
+            logOutput << CurrentTimeString() << "InitDXGICapture: successfully installed DXGISwapResizeBuffersHook" << endl;
+        }
 
         SafeRelease(swap);
 
@@ -312,4 +398,6 @@ void FreeDXGICapture()
     ClearD3D10Data();
     ClearD3D101Data();
     ClearD3D11Data();
+
+    DeleteCriticalSection(&g_swapHookCS);
 }

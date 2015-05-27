@@ -291,7 +291,7 @@ inline bool AttemptToHookSomething()
         bDirectDrawHooked = true;
     }
 
-    if (!bD3D8Hooked && InitD3D8Capture())
+    /*if (!bD3D8Hooked && InitD3D8Capture())
     {
         logOutput << CurrentTimeString() << "D3D8 Present" << endl;
         bFoundSomethingToHook = true;
@@ -299,7 +299,7 @@ inline bool AttemptToHookSomething()
     }
     else {
         CheckD3D8Capture();
-    }
+    }*/
 
     return bFoundSomethingToHook;
 }
@@ -397,8 +397,11 @@ DWORD WINAPI CaptureThread(HANDLE hDllMainThread)
     }
 
     TCHAR lpLogPath[MAX_PATH];
-    SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT, lpLogPath);
-    wcscat_s(lpLogPath, MAX_PATH, TEXT("\\OBS\\pluginData\\captureHookLog.txt"));
+    //SHGetFolderPath(NULL, CSIDL_APPDATA, NULL, SHGFP_TYPE_CURRENT, lpLogPath);
+    GetTempPath(MAX_PATH, lpLogPath);
+
+    //wcscat_s(lpLogPath, MAX_PATH, TEXT("\\OBS\\pluginData\\captureHookLog.txt"));
+    wcscat_s(lpLogPath, MAX_PATH, TEXT("capture.txt"));
 
     dummyEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 
@@ -513,7 +516,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD dwReason, LPVOID lpBlah)
 
         GetModuleFileNameW(hinstDLL, name, 4096);
         LoadLibrary(name);
-
+         
         HANDLE hDllMainThread = OpenThread(THREAD_ALL_ACCESS, NULL, GetCurrentThreadId());
 
         if(!(hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)CaptureThread, (LPVOID)hDllMainThread, 0, 0)))
