@@ -50,7 +50,7 @@ DOCLEARPROC   clearProc = NULL;
 extern LPVOID lpCurrentSwap;
 extern LPVOID lpCurrentDevice;
 
-bool g_capturingPrimary;
+bool g_capturingPrimary = false;
 
 CRITICAL_SECTION g_swapHookCS;
 
@@ -145,7 +145,7 @@ HRESULT STDMETHODCALLTYPE DXGISwapPresentHook(IDXGISwapChain *swap, UINT syncInt
     bool multipleOutputs = false;
     bool isPrimary = true;
 
-    logOutput << CurrentTimeString() << "DXGI: DXGISwapPresentHook called flags=" << flags <<
+    RUNEVERYRESET logOutput << CurrentTimeString() << "DXGI: DXGISwapPresentHook called flags=" << flags <<
         "cx=" << scd.BufferDesc.Width << " cy=" << scd.BufferDesc.Height << " wnd=" << scd.OutputWindow << endl;
 
     IDXGIDevice *device;
